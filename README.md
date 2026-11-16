@@ -1,34 +1,53 @@
-# LMS — 33 Celery
+# LMS — 34.2 Docker Compose
 
-## Что добавлено
-- `config/celery.py` — приложение Celery, настройки читаются из `settings.py` с префиксом `CELERY_`
-- Адреса Redis (брокер и бэкенд результатов) вынесены в `.env` (`CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`)
-- `CELERY_TIMEZONE` совпадает с `TIME_ZONE` проекта (Europe/Moscow)
-- `lms/tasks.py` — `send_course_update_email`: письмо всем подписчикам курса об обновлении материалов
-- Задача вызывается через `.delay()` после успешного обновления курса или урока (`perform_update`)
-- Доп. задание: письмо уходит, только если курс не обновлялся больше 4 часов (`timezone.now() - updated_at`)
-- `users/tasks.py` — `block_inactive_users`: блокирует (`is_active=False`) пользователей, не заходивших
-  больше месяца по `last_login`; обновление одним запросом (батчем)
-- Расписание celery-beat в `CELERY_BEAT_SCHEDULE`: проверка неактивных пользователей каждый день в 00:00
+Платформа онлайн-обучения на Django REST Framework. Все части проекта запускаются одной командой через Docker Compose.
+
+## Сервисы
+
+| Сервис | Назначение | Доступ |
+|---|---|---|
+| `web` | Django-приложение | порт `8000` наружу |
+| `db` | PostgreSQL 16 | только внутри сети (`expose 5432`), данные в томе `postgres_data` |
+| `redis` | брокер Celery | только внутри сети (`expose 6379`), данные в томе `redis_data` |
+| `celery` | воркер фоновых задач | без портов |
+| `celery-beat` | планировщик периодических задач | без портов |
+
+Сервисы `web`, `celery` и `celery-beat` стартуют только после того, как база и Redis прошли healthcheck.
+При запуске `web` автоматически применяет миграции и собирает статику.
 
 ## Запуск
-Нужен запущенный Redis.
-```
-pip install -r requirements.txt
-cp .env.sample .env
-python manage.py migrate
-python manage.py loaddata groups.json
-python manage.py runserver
-```
-В отдельных терминалах:
-```
-celery -A config worker -l info
-celery -A config beat -l info
-```
-На Windows воркер запускать так: `celery -A config worker -l info -P solo`
 
-## Тесты
+1. Установите Docker и Docker Compose.
+2. Создайте файл `.env` по образцу:
+   ```
+   cp .env.sample .env
+   ```
+   В `.env` для Docker адреса сервисов указываются по именам: `POSTGRES_HOST=db`, `CELERY_BROKER_URL=redis://redis:6379/0`.
+3. Соберите и запустите проект:
+   ```
+   docker compose up -d --build
+   ```
+4. Создайте суперпользователя и загрузите фикстуры:
+   ```
+   docker compose exec web python manage.py createsuperuser
+   docker compose exec web python manage.py loaddata groups.json
+   ```
+
+Приложение: http://localhost:8000/
+Документация API: http://localhost:8000/api/docs/
+
+## Полезные команды
+
 ```
-coverage run --source='.' manage.py test
-coverage report
+docker compose ps                 # статус сервисов
+docker compose logs -f web        # логи приложения
+docker compose logs -f celery     # логи воркера
+docker compose exec web python manage.py test   # тесты внутри контейнера
+docker compose down               # остановить
+docker compose down -v            # остановить и удалить тома с данными
 ```
+
+## Переменные окружения
+
+Все настройки (секретный ключ, доступ к базе, Redis, Stripe, почта) задаются в `.env`.
+Файл подключён ко всем сервисам через `env_file` и не попадает в репозиторий (`.gitignore`).
